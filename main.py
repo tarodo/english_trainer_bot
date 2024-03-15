@@ -78,6 +78,19 @@ def keyboard_maker(buttons, number):
     return markup
 
 
+def keyboard_in_maker(buttons: list, prefix: str, number: int):
+    answer_keys = [
+        InlineKeyboardButton(ans[0], callback_data=f"{prefix}:{ans[1]}")
+        for ans in buttons
+    ]
+    keyboard = [
+        answer_keys[button : button + number]
+        for button in range(0, len(answer_keys), number)
+    ]
+    reply_in = InlineKeyboardMarkup(keyboard)
+    return reply_in
+
+
 async def get_user_token(user_id: int, bot_token: str) -> str | None:
     logger.debug("user api token :: start")
     url = f"{API_URL}/login/access-token-bot"
