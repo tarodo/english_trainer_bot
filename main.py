@@ -78,7 +78,7 @@ def keyboard_maker(buttons, number):
     return markup
 
 
-def keyboard_in_maker(buttons: list, prefix: str, number: int):
+def keyboard_in_maker(buttons: tuple, prefix: str, number: int):
     answer_keys = [
         InlineKeyboardButton(ans[0], callback_data=f"{prefix}:{ans[1]}")
         for ans in buttons
@@ -139,8 +139,13 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     text = "Hello my friend! What do you want from me?"
-    buttons = ["Words"]
-    markup = keyboard_maker(buttons, 2)
+    buttons = (
+        (
+            "Words",
+            "words",
+        ),
+    )
+    markup = keyboard_in_maker(buttons, "main", 2)
     message_id = await update.message.reply_text(
         text,
         reply_markup=markup,
@@ -172,11 +177,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data["user_token"] = user_token
 
     if not user_token:
-        await update.message.reply_text("You do not have a token")
+        await update.message.reply_text("Sorry. You do not have a token")
         return ConversationHandler.END
 
-    await update.message.reply_text(f"Success!! {user_id}")
     return await main_menu(update, context)
+
+
+async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("handle main menu :: start")
+    query = update.callback_query
+    if not query:
+        return None
+
+    await query.answer()
+    if not query.data or not query.message:
+        return None
+
+    prefix, next_menu = query.data.split(":")
+    logger.debug(f"handle main menu :: conf : {prefix} : {next_menu}")
+    await query.edit_message_text(text=f"{next_menu} : {query.message.text}")
+    logger.debug("handle main menu :: finish")
+    return None
 
 
 async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
@@ -212,7 +233,7 @@ def main() -> None:
         entry_points=[CommandHandler("start", start)],
         states={
             StateEnum.CHOOSING_ACT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, start),
+                CallbackQueryHandler(handle_main_menu, pattern="main:"),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
