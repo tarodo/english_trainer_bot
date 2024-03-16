@@ -27,6 +27,8 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 
+from core import get_wordsets
+
 load_dotenv()
 
 logging.basicConfig(
@@ -35,7 +37,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
 
-API_URL = os.getenv("API_URL")
+API_URL = os.getenv("API_URL", "")
 
 
 class StateEnum(IntEnum):
@@ -78,7 +80,7 @@ def keyboard_maker(buttons, number):
     return markup
 
 
-def keyboard_in_maker(buttons: tuple, prefix: str, number: int):
+def keyboard_in_maker(buttons: tuple, prefix: str, number: int) -> InlineKeyboardMarkup:
     answer_keys = [
         InlineKeyboardButton(ans[0], callback_data=f"{prefix}:{ans[1]}")
         for ans in buttons
@@ -183,11 +185,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await main_menu(update, context)
 
 
+async def create_wordsets_menu(user_token: str) -> InlineKeyboardMarkup | None:
+    wordsets = get_wordsets(API_URL, user_token)
+    if not wordsets:
+        return None
+    buttons = [(ws["title"], ws["id"]) for ws in wordsets]
+    return keyboard_in_maker(buttons, "wordsets", 3)
+
+
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.debug("handle main menu :: start")
     query = update.callback_query
     if not query:
         return None
+    user_token = context.user_data.get("user_token", "") if context.user_data else ""
 
     await query.answer()
     if not query.data or not query.message:
@@ -195,7 +206,11 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prefix, next_menu = query.data.split(":")
     logger.debug(f"handle main menu :: conf : {prefix} : {next_menu}")
-    await query.edit_message_text(text=f"{next_menu} : {query.message.text}")
+
+    markup = await create_wordsets_menu(user_token)
+    await query.edit_message_text(
+        text="We have some sets for training", reply_markup=markup
+    )
     logger.debug("handle main menu :: finish")
     return None
 
