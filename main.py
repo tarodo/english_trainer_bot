@@ -27,7 +27,7 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 
-from core import get_wordsets
+from core import get_wordsets, get_wordset_quiz
 
 load_dotenv()
 
@@ -42,6 +42,7 @@ API_URL = os.getenv("API_URL", "")
 
 class StateEnum(IntEnum):
     CHOOSING_ACT = auto()
+    CHOOSING_WORDSET = auto()
     WORD_PLAY = auto()
 
 
@@ -193,16 +194,16 @@ async def create_wordsets_menu(user_token: str) -> InlineKeyboardMarkup | None:
     return keyboard_in_maker(buttons, "wordsets", 3)
 
 
-async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.debug("handle main menu :: start")
     query = update.callback_query
     if not query:
-        return None
+        return ConversationHandler.END
     user_token = context.user_data.get("user_token", "") if context.user_data else ""
 
     await query.answer()
-    if not query.data or not query.message:
-        return None
+    if not query.data:
+        return ConversationHandler.END
 
     prefix, next_menu = query.data.split(":")
     logger.debug(f"handle main menu :: conf : {prefix} : {next_menu}")
@@ -212,7 +213,36 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text="We have some sets for training", reply_markup=markup
     )
     logger.debug("handle main menu :: finish")
-    return None
+    return StateEnum.CHOOSING_WORDSET
+
+
+async def create_wordsets_quizz(user_token: str, set_id: str):
+    wordset_quizz = get_wordset_quiz(API_URL, user_token, set_id)
+    if not wordset_quizz:
+        return None
+    return wordset_quizz
+
+
+async def handle_wordset_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    logger.debug("handle wordset :: start")
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    user_token = context.user_data.get("user_token", "") if context.user_data else ""
+
+    await query.answer()
+    if not query.data:
+        return ConversationHandler.END
+
+    prefix, wordset_id = query.data.split(":")
+    logger.debug(f"handle main menu :: conf : {prefix} : {wordset_id}")
+    msg = f"You chose :: {wordset_id}"
+    await query.edit_message_text(msg)
+    wordset_quizz = await create_wordsets_quizz(user_token, wordset_id)
+    logger.debug("handle wordset :: finish")
+    return StateEnum.WORD_PLAY
 
 
 async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
@@ -249,6 +279,9 @@ def main() -> None:
         states={
             StateEnum.CHOOSING_ACT: [
                 CallbackQueryHandler(handle_main_menu, pattern="main:"),
+            ],
+            StateEnum.CHOOSING_WORDSET: [
+                CallbackQueryHandler(handle_wordset_menu, pattern="wordsets:")
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
