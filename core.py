@@ -34,7 +34,7 @@ def get_wordsets(api_url: str, api_token: str) -> list:
     return wordsets
 
 
-def get_wordset_quiz(api_url: str, api_token: str, set_id: str):
+def get_wordset_quiz(api_url: str, api_token: str, set_id: str) -> list | None:
     logger.debug("get wordset quizz :: start")
     url = f"{api_url}/words/quizz/{set_id}"
     headers = {"Authorization": f"Bearer {api_token}"}
@@ -46,7 +46,7 @@ def get_wordset_quiz(api_url: str, api_token: str, set_id: str):
     except Exception:
         pass
     if not quiz_set:
-        return tuple()
+        return list()
     quizz_words = quiz_set.get("words")
     if not quizz_words:
         return None
@@ -62,7 +62,7 @@ def get_wordset_quiz(api_url: str, api_token: str, set_id: str):
 
     logger.debug(f"get wordsets quizz :: {quizz}")
     logger.debug("get wordset quizz :: finish")
-    return quiz_set
+    return quizz
 
 
 def get_word_quiz(word_set: int) -> WordQuizz:

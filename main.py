@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
 from functools import partial
 from time import sleep
+from typing import Iterable
 
 import requests
 from telegram import (
@@ -68,7 +69,7 @@ def get_bot_token(bot_email, bot_pass):
             api_token = res.json()["access_token"]
             logger.debug(f"bot api token :: {api_token}")
         except requests.exceptions.ConnectionError:
-            logger.error(f"ConnectionError in bot api token gen")
+            logger.error("ConnectionError in bot api token gen")
             sleep(2)
     return api_token
 
@@ -81,7 +82,9 @@ def keyboard_maker(buttons, number):
     return markup
 
 
-def keyboard_in_maker(buttons: tuple, prefix: str, number: int) -> InlineKeyboardMarkup:
+def keyboard_in_maker(
+    buttons: Iterable, prefix: str, number: int
+) -> InlineKeyboardMarkup:
     answer_keys = [
         InlineKeyboardButton(ans[0], callback_data=f"{prefix}:{ans[1]}")
         for ans in buttons
@@ -149,11 +152,12 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ),
     )
     markup = keyboard_in_maker(buttons, "main", 2)
-    message_id = await update.message.reply_text(
+    new_message = await update.message.reply_text(
         text,
         reply_markup=markup,
     )
-    context.user_data["active_message"] = message_id
+    context.user_data["stat_msg_id"] = new_message.message_id
+    context.user_data["quizz_msg_id"] = None
 
     return StateEnum.CHOOSING_ACT
 
@@ -168,6 +172,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.message.from_user.id
     if not user_id:
         return ConversationHandler.END
+
+    chat_id = update.message.chat_id
+    if context.user_data is None:
+        return ConversationHandler.END
+    context.user_data["chat_id"] = chat_id
+
+    msg_id = update.message.message_id
+    await context.bot.delete_message(chat_id, msg_id)
 
     user_token = context.user_data.get("user_token") if context.user_data else None
     bot_token = context.bot_data.get("bot_token") if context.bot_data else None
@@ -194,12 +206,43 @@ async def create_wordsets_menu(user_token: str) -> InlineKeyboardMarkup | None:
     return keyboard_in_maker(buttons, "wordsets", 3)
 
 
+async def show_wordset_menu(context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_token = context.user_data.get("user_token", "") if context.user_data else ""
+    if not user_token:
+        return ConversationHandler.END
+    markup = await create_wordsets_menu(user_token)
+
+    if not context.user_data:
+        return ConversationHandler.END
+
+    stat_msg_id = context.user_data.get("stat_msg_id")
+    quizz_msg_id = context.user_data.get("quizz_msg_id")
+    chat_id = context.user_data.get("chat_id")
+    logger.debug(f"{stat_msg_id=} :: {quizz_msg_id=} :: {chat_id}")
+    if not chat_id:
+        return ConversationHandler.END
+    if quizz_msg_id:
+        context.user_data["quizz_msg_id"] = None
+        await context.bot.delete_message(chat_id, quizz_msg_id)
+    logger.debug(f"show wordset menu :: {stat_msg_id=}")
+    chat_id = context.user_data.get("chat_id")
+    msg = "We have some sets for training"
+    prev_stats = context.user_data.get("wordset_stats")
+    if prev_stats and prev_stats.get("words"):
+        msg += f"\nResult\nWords: {prev_stats['words']}"
+        msg += f"\nCorrect: {prev_stats['correct']} :: Incorrect: {prev_stats['incorrect']}"
+
+    await context.bot.edit_message_text(
+        text=msg, chat_id=chat_id, message_id=stat_msg_id, reply_markup=markup
+    )
+    return StateEnum.CHOOSING_WORDSET
+
+
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.debug("handle main menu :: start")
     query = update.callback_query
     if not query:
         return ConversationHandler.END
-    user_token = context.user_data.get("user_token", "") if context.user_data else ""
 
     await query.answer()
     if not query.data:
@@ -207,20 +250,68 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     prefix, next_menu = query.data.split(":")
     logger.debug(f"handle main menu :: conf : {prefix} : {next_menu}")
-
-    markup = await create_wordsets_menu(user_token)
-    await query.edit_message_text(
-        text="We have some sets for training", reply_markup=markup
-    )
     logger.debug("handle main menu :: finish")
-    return StateEnum.CHOOSING_WORDSET
+    return await show_wordset_menu(context)
 
 
-async def create_wordsets_quizz(user_token: str, set_id: str):
+async def create_wordsets_quizz(user_token: str, set_id: str) -> list | None:
     wordset_quizz = get_wordset_quiz(API_URL, user_token, set_id)
     if not wordset_quizz:
         return None
     return wordset_quizz
+
+
+async def show_statistics(context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data:
+        return None
+
+    stat_msg_id = context.user_data["stat_msg_id"]
+    chat_id = context.user_data["chat_id"]
+    stats = context.user_data["wordset_stats"]
+    msg = "Your statistics:\n"
+    msg += f"Words: {stats.get('words')}\n"
+    msg += f"Correct {stats.get('correct')}\n"
+    msg += f"Incorrect: {stats.get('incorrect')}"
+    await context.bot.edit_message_text(msg, chat_id, stat_msg_id)
+
+
+async def show_wordset_word(context: ContextTypes.DEFAULT_TYPE, play_word) -> int:
+    if not context.user_data:
+        return ConversationHandler.END
+
+    buttons = [
+        (play_word[2].capitalize(), 1),
+    ] + [(el.capitalize(), 0) for el in play_word[3]]
+    random.shuffle(buttons)
+    markup = keyboard_in_maker(buttons, f"wordset>quizz>{play_word[0]}", 2)
+    msg = f"{play_word[1].capitalize()}"
+
+    quizz_msg_id = context.user_data.get("quizz_msg_id")
+    chat_id = context.user_data.get("chat_id")
+    if not chat_id:
+        return ConversationHandler.END
+    if not quizz_msg_id:
+        quizz_msg = await context.bot.send_message(
+            chat_id, text=msg, reply_markup=markup
+        )
+        context.user_data["quizz_msg_id"] = quizz_msg.message_id
+    else:
+        await context.bot.edit_message_text(
+            text=msg, chat_id=chat_id, message_id=quizz_msg_id, reply_markup=markup
+        )
+    return StateEnum.WORD_PLAY
+
+
+async def wordset_quizz_play(context: ContextTypes.DEFAULT_TYPE) -> int:
+    wordset_quizz = context.user_data["wordset_quizz"] if context.user_data else None
+    logger.debug(f"wordset quizz play :: {wordset_quizz}")
+    if not wordset_quizz:
+        return await show_wordset_menu(context)
+    play_word = wordset_quizz.pop()
+    if not play_word:
+        return await show_wordset_menu(context)
+    await show_statistics(context)
+    return await show_wordset_word(context, play_word)
 
 
 async def handle_wordset_menu(
@@ -230,19 +321,43 @@ async def handle_wordset_menu(
     query = update.callback_query
     if not query:
         return ConversationHandler.END
+    await query.answer()
+    if not query.data:
+        return ConversationHandler.END
+
     user_token = context.user_data.get("user_token", "") if context.user_data else ""
+    prefix, wordset_id = query.data.split(":")
+    logger.debug(f"handle main menu :: conf : {prefix} : {wordset_id}")
+    wordset_quizz = await create_wordsets_quizz(user_token, wordset_id)
+    if not wordset_quizz or not context.user_data:
+        return ConversationHandler.END
+    context.user_data["wordset_quizz"] = wordset_quizz
+    context.user_data["wordset_stats"] = {"words": 0, "correct": 0, "incorrect": 0}
+    logger.debug("handle wordset :: finish")
+    return await wordset_quizz_play(context)
+
+
+async def handle_wordset_play(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("handle wordset play :: start")
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
 
     await query.answer()
     if not query.data:
         return ConversationHandler.END
 
-    prefix, wordset_id = query.data.split(":")
-    logger.debug(f"handle main menu :: conf : {prefix} : {wordset_id}")
-    msg = f"You chose :: {wordset_id}"
-    await query.edit_message_text(msg)
-    wordset_quizz = await create_wordsets_quizz(user_token, wordset_id)
-    logger.debug("handle wordset :: finish")
-    return StateEnum.WORD_PLAY
+    prefix, is_correct = query.data.split(":")
+    logger.debug(f"handle wordset play :: {prefix} : {is_correct}")
+    stats = context.user_data.get("wordset_stats") if context.user_data else None
+    if not stats:
+        return ConversationHandler.END
+    stats["words"] += 1
+    if int(is_correct):
+        stats["correct"] += 1
+    else:
+        stats["incorrect"] += 1
+    return await wordset_quizz_play(context)
 
 
 async def cancel(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
@@ -282,6 +397,9 @@ def main() -> None:
             ],
             StateEnum.CHOOSING_WORDSET: [
                 CallbackQueryHandler(handle_wordset_menu, pattern="wordsets:")
+            ],
+            StateEnum.WORD_PLAY: [
+                CallbackQueryHandler(handle_wordset_play, pattern="wordset>quizz")
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
