@@ -1,21 +1,13 @@
 import logging
 import os
 import random
-import string
-from dataclasses import dataclass
 from enum import IntEnum, Enum, auto
-from functools import partial
-from time import sleep
-from typing import Iterable
 
 import requests
 from telegram import (
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     Update,
-    User,
 )
 from telegram.ext import (
     Application,
@@ -23,15 +15,12 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     ConversationHandler,
-    MessageHandler,
-    filters,
 )
 from dotenv import load_dotenv
 
-from common import random_email, random_lower_string, keyboard_in_maker, UserInfo, set_context_data, get_context_data, \
-    create_menu_markup
-from core import get_wordsets, get_wordset_quiz
-from data.menu import main_bot_menu
+from common import keyboard_in_maker, UserInfo, set_context_data, get_context_data, \
+    create_menu_markup, BotInfo, split_query, QuizzTypeEnum, main_bot_menu
+from core import get_wordsets, get_wordset_quiz, get_bot_token, get_user_token, reg_user
 from data.messages import bot_messages
 
 load_dotenv()
@@ -42,72 +31,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
 
-API_URL = os.getenv("API_URL", "")
-
 
 class StateEnum(IntEnum):
     CHOOSING_ACT = auto()
     CHOOSING_WORDSET = auto()
     WORD_PLAY = auto()
-
-
-def get_bot_token(bot_email, bot_pass):
-    """Get bot token for the api"""
-    logger.debug("bot api token :: start")
-    api_token = ""
-    while not api_token:
-        url = f"{API_URL}/login/access-token"
-        data = {"username": bot_email, "password": bot_pass}
-        try:
-            logger.debug(f"bot api token :: {url=} :: {data=}")
-            res = requests.post(url, data=data)
-            res.raise_for_status()
-            api_token = res.json()["access_token"]
-            logger.debug(f"bot api token :: {api_token}")
-        except requests.exceptions.ConnectionError:
-            logger.error("ConnectionError in bot api token gen")
-            sleep(2)
-    return api_token
-
-
-async def get_user_token(user_id: int, bot_token: str) -> str | None:
-    logger.debug("user api token :: start")
-    url = f"{API_URL}/login/access-token-bot"
-    headers = {"Authorization": f"Bearer {bot_token}"}
-    data = {"tg_id": user_id}
-    res_body = None
-    try:
-        logger.debug(f"user api token :: {url=} : {data=} :: {headers=}")
-        res = requests.post(url, json=data, headers=headers)
-        res.raise_for_status()
-        user_token = res.json()["access_token"]
-        logger.debug(f"user api token :: {user_token}")
-    except Exception:
-        logger.debug(f"user api token :: empty :: {res_body}")
-        return None
-    logger.debug("user api token :: finish")
-    return user_token
-
-
-async def reg_user(user_id: int, bot_token: str) -> str | None:
-    logger.debug("user reg :: start")
-    url = f"{API_URL}/users/"
-    headers = {"Authorization": f"Bearer {bot_token}"}
-    data = {
-        "email": random_email(),
-        "tg_id": user_id,
-        "password": random_lower_string(),
-    }
-    res_body = None
-    try:
-        logger.debug(f"user reg :: {url=} : {data=} :: {headers=}")
-        res = requests.post(url, json=data, headers=headers)
-        res_body = res.text
-        res.raise_for_status()
-        return res.json()["access_token"]
-    except Exception:
-        logger.debug(f"user reg :: empty :: {res_body}")
-        return None
 
 
 async def clear_messages(context: ContextTypes.DEFAULT_TYPE):
@@ -126,13 +54,16 @@ async def clear_messages(context: ContextTypes.DEFAULT_TYPE):
     user_info.msg_to_delete = []
 
 
-def is_context_correct(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                       need_message: bool = True, need_user_data: bool = True) -> bool:
-    if need_message and not update.message or not update.message.from_user:
+def is_context_correct(update: Update | None, context: ContextTypes.DEFAULT_TYPE | None,
+                       need_message: bool = True, need_user_data: bool = True,
+                       need_query: bool = False) -> bool:
+    if need_message and not (update.message and update.message.from_user):
         return False
     if not context:
         return False
     if need_user_data and not context.user_data:
+        return False
+    if need_query and not update.callback_query:
         return False
     return True
 
@@ -142,7 +73,7 @@ async def set_state(context: ContextTypes.DEFAULT_TYPE, state: int) -> int:
     return state
 
 
-async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Send first question for the user"""
     if not is_context_correct(update, context):
         return ConversationHandler.END
@@ -153,9 +84,9 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         text,
         reply_markup=markup,
     )
+    bot_info = BotInfo(active_bot_msg=new_message.message_id)
+    set_context_data(context.user_data, bot_info)
 
-    context.user_data["stat_msg_id"] = new_message.message_id
-    context.user_data["quizz_msg_id"] = None
     return await set_state(context, StateEnum.CHOOSING_ACT)
 
 
@@ -171,13 +102,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not user_token:
         user_token = await reg_user(user_id, bot_token)
 
-    user_info = UserInfo(user_id=user_id, chat_id=update.message.chat_id, user_token=user_token, msg_to_delete=[update.message.message_id,])
+    user_info = UserInfo(user_id=user_id, chat_id=update.message.chat_id, user_token=user_token,
+                         msg_to_delete=[update.message.message_id,])
+    logger.debug(f"{user_info=}")
     set_context_data(context.user_data, user_info)
-    return await main_menu(update, context)
+    return await show_main_menu(update, context)
 
 
 async def create_wordsets_menu(user_token: str) -> InlineKeyboardMarkup | None:
-    wordsets = get_wordsets(API_URL, user_token)
+    wordsets = get_wordsets(user_token)
     if not wordsets:
         return None
     buttons = [(ws["title"], ws["id"]) for ws in wordsets]
@@ -185,13 +118,15 @@ async def create_wordsets_menu(user_token: str) -> InlineKeyboardMarkup | None:
 
 
 async def show_wordset_menu(context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_token = context.user_data.get("user_token", "") if context.user_data else ""
-    if not user_token:
+    if not is_context_correct(context=context, update=None, need_query=False, need_message=False):
         return ConversationHandler.END
-    markup = await create_wordsets_menu(user_token)
 
-    if not context.user_data:
-        return ConversationHandler.END
+    user_info = get_context_data(context.user_data, UserInfo)
+    bot_info = get_context_data(context.user_data, BotInfo)
+
+    bot_info
+
+    markup = await create_wordsets_menu(user_info.user_token)
 
     stat_msg_id = context.user_data.get("stat_msg_id")
     quizz_msg_id = context.user_data.get("quizz_msg_id")
@@ -218,18 +153,21 @@ async def show_wordset_menu(context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.debug("handle main menu :: start")
+    if not is_context_correct(update, context, need_message=False, need_query=True):
+        return ConversationHandler.END
+
     query = update.callback_query
-    if not query:
-        return ConversationHandler.END
-
     await query.answer()
-    if not query.data:
-        return ConversationHandler.END
+    bot_info = get_context_data(context.user_data, BotInfo)
+    prefix, choice = split_query(query.data)
+    logger.debug(f"handle main menu :: {prefix=} : {choice=}")
 
-    prefix, next_menu = query.data.split(":")
-    logger.debug(f"handle main menu :: {prefix} : {next_menu}")
     logger.debug("handle main menu :: finish")
-    return await show_wordset_menu(context)
+    if choice == "words":
+        bot_info.quizz_type = QuizzTypeEnum.WORDS
+        return await show_wordset_menu(context)
+
+    return ConversationHandler.END
 
 
 async def create_wordsets_quizz(user_token: str, set_id: str) -> list | None:
@@ -371,7 +309,7 @@ def main() -> None:
         entry_points=[CommandHandler("start", start)],
         states={
             StateEnum.CHOOSING_ACT: [
-                CallbackQueryHandler(handle_main_menu, pattern="main:"),
+                CallbackQueryHandler(handle_main_menu, pattern=main_bot_menu.prefix)
             ],
             StateEnum.CHOOSING_WORDSET: [
                 CallbackQueryHandler(handle_wordset_menu, pattern="wordsets:")

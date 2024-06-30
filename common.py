@@ -1,3 +1,4 @@
+from enum import Enum
 from dataclasses import dataclass, field
 import logging
 import random
@@ -12,14 +13,17 @@ from telegram import (
 
 from telegram.ext import ContextTypes
 
-from data.menu import BotMenu
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
 
-
+QUERY_SEPARATOR = ":"
 DEFAULT_CONTEXT = ContextTypes.DEFAULT_TYPE
 UserDataT = TypeVar("UserDataT")
+
+
+class QuizzTypeEnum(Enum):
+    WORDS = "words"
 
 
 @dataclass
@@ -29,6 +33,30 @@ class UserInfo:
     chat_id: int
     user_token: str
     msg_to_delete: list[int] = field(default_factory=list)
+
+
+@dataclass
+class BotInfo:
+    _field_name_ = "bot_info"
+    active_bot_msg: int
+    quizz_type: QuizzTypeEnum | None = None
+
+
+@dataclass
+class BotMenu:
+    prefix: str
+    buttons: list[tuple[str, str]] = field(default_factory=list)
+    number: int = 2
+
+
+main_bot_menu = BotMenu(
+    prefix="main",
+    buttons=[
+        ("📚 Учить слова", QuizzTypeEnum.WORDS.value),
+        ("📝 Статистика", "stats"),
+        ("🔧 Настройки", "settings"),
+    ],
+)
 
 
 def random_lower_string(str_len: int = 32) -> str:
@@ -51,7 +79,7 @@ def keyboard_in_maker(
     buttons: Iterable, prefix: str, number: int
 ) -> InlineKeyboardMarkup:
     answer_keys = [
-        InlineKeyboardButton(ans[0], callback_data=f"{prefix}:{ans[1]}")
+        InlineKeyboardButton(ans[0], callback_data=f"{prefix}{QUERY_SEPARATOR}{ans[1]}")
         for ans in buttons
     ]
     keyboard = [
@@ -88,3 +116,7 @@ def set_context_data(
 
 def create_menu_markup(bot_menu: BotMenu) -> InlineKeyboardMarkup:
     return keyboard_in_maker(bot_menu.buttons, bot_menu.prefix, bot_menu.number)
+
+
+def split_query(query: str) -> list[str]:
+    return query.split(QUERY_SEPARATOR)
