@@ -28,7 +28,11 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 
+from common import random_email, random_lower_string, keyboard_in_maker, UserInfo, set_context_data, get_context_data, \
+    create_menu_markup
 from core import get_wordsets, get_wordset_quiz
+from data.menu import main_bot_menu
+from data.messages import bot_messages
 
 load_dotenv()
 
@@ -45,14 +49,6 @@ class StateEnum(IntEnum):
     CHOOSING_ACT = auto()
     CHOOSING_WORDSET = auto()
     WORD_PLAY = auto()
-
-
-def random_lower_string(str_len: int = 32) -> str:
-    return "".join(random.choices(string.ascii_lowercase, k=str_len))
-
-
-def random_email() -> str:
-    return f"{random_lower_string(20)}@{random_lower_string(6)}.com"
 
 
 def get_bot_token(bot_email, bot_pass):
@@ -72,29 +68,6 @@ def get_bot_token(bot_email, bot_pass):
             logger.error("ConnectionError in bot api token gen")
             sleep(2)
     return api_token
-
-
-def keyboard_maker(buttons, number):
-    keyboard = [
-        buttons[button : button + number] for button in range(0, len(buttons), number)
-    ]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-    return markup
-
-
-def keyboard_in_maker(
-    buttons: Iterable, prefix: str, number: int
-) -> InlineKeyboardMarkup:
-    answer_keys = [
-        InlineKeyboardButton(ans[0], callback_data=f"{prefix}:{ans[1]}")
-        for ans in buttons
-    ]
-    keyboard = [
-        answer_keys[button : button + number]
-        for button in range(0, len(answer_keys), number)
-    ]
-    reply_in = InlineKeyboardMarkup(keyboard)
-    return reply_in
 
 
 async def get_user_token(user_id: int, bot_token: str) -> str | None:
@@ -131,70 +104,75 @@ async def reg_user(user_id: int, bot_token: str) -> str | None:
         res = requests.post(url, json=data, headers=headers)
         res_body = res.text
         res.raise_for_status()
-        return await get_user_token(user_id, bot_token)
+        return res.json()["access_token"]
     except Exception:
         logger.debug(f"user reg :: empty :: {res_body}")
         return None
 
 
+async def clear_messages(context: ContextTypes.DEFAULT_TYPE):
+    if not context or not context.user_data:
+        return None
+    user_info = get_context_data(context.user_data, UserInfo)
+    chat_id = user_info.chat_id
+    messages = user_info.msg_to_delete
+    if not chat_id or not messages:
+        return None
+    for msg_id in messages:
+        try:
+            await context.bot.delete_message(chat_id, msg_id)
+        except Exception:
+            pass
+    user_info.msg_to_delete = []
+
+
+def is_context_correct(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       need_message: bool = True, need_user_data: bool = True) -> bool:
+    if need_message and not update.message or not update.message.from_user:
+        return False
+    if not context:
+        return False
+    if need_user_data and not context.user_data:
+        return False
+    return True
+
+
+async def set_state(context: ContextTypes.DEFAULT_TYPE, state: int) -> int:
+    await clear_messages(context)
+    return state
+
+
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Send first question for the user"""
-    if not update.message or not update.message.from_user:
-        return ConversationHandler.END
-    if not context or not context.user_data:
+    if not is_context_correct(update, context):
         return ConversationHandler.END
 
-    text = "Hello my friend! What do you want from me?"
-    buttons = (
-        (
-            "Words",
-            "words",
-        ),
-    )
-    markup = keyboard_in_maker(buttons, "main", 2)
+    text = bot_messages.get("welcome")
+    markup = create_menu_markup(main_bot_menu)
     new_message = await update.message.reply_text(
         text,
         reply_markup=markup,
     )
+
     context.user_data["stat_msg_id"] = new_message.message_id
     context.user_data["quizz_msg_id"] = None
-
-    return StateEnum.CHOOSING_ACT
+    return await set_state(context, StateEnum.CHOOSING_ACT)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the conversation and ask user for input."""
-    if not update.message or not update.message.from_user:
-        return ConversationHandler.END
-    if not context:
+    if not is_context_correct(update, context, need_user_data=False):
         return ConversationHandler.END
 
     user_id = update.message.from_user.id
-    if not user_id:
-        return ConversationHandler.END
 
-    chat_id = update.message.chat_id
-    if context.user_data is None:
-        return ConversationHandler.END
-    context.user_data["chat_id"] = chat_id
-
-    msg_id = update.message.message_id
-    await context.bot.delete_message(chat_id, msg_id)
-
-    user_token = context.user_data.get("user_token") if context.user_data else None
-    bot_token = context.bot_data.get("bot_token") if context.bot_data else None
-    logger.debug(f"start :: {user_token=} :: {bot_token=}")
-    if not user_token and bot_token:
-        user_token = await get_user_token(user_id, bot_token)
-    if user_token:
-        if context.user_data is None:
-            return ConversationHandler.END
-        context.user_data["user_token"] = user_token
-
+    bot_token = context.bot_data.get("bot_token")
+    user_token = await get_user_token(user_id, bot_token)
     if not user_token:
-        await update.message.reply_text("Sorry. You do not have a token")
-        return ConversationHandler.END
+        user_token = await reg_user(user_id, bot_token)
 
+    user_info = UserInfo(user_id=user_id, chat_id=update.message.chat_id, user_token=user_token, msg_to_delete=[update.message.message_id,])
+    set_context_data(context.user_data, user_info)
     return await main_menu(update, context)
 
 
@@ -249,7 +227,7 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return ConversationHandler.END
 
     prefix, next_menu = query.data.split(":")
-    logger.debug(f"handle main menu :: conf : {prefix} : {next_menu}")
+    logger.debug(f"handle main menu :: {prefix} : {next_menu}")
     logger.debug("handle main menu :: finish")
     return await show_wordset_menu(context)
 

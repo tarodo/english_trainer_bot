@@ -12,6 +12,8 @@ from telegram import (
 
 from telegram.ext import ContextTypes
 
+from data.menu import BotMenu
+
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
 
@@ -23,8 +25,10 @@ UserDataT = TypeVar("UserDataT")
 @dataclass
 class UserInfo:
     _field_name_ = "user_info"
+    user_id: int
     chat_id: int
     user_token: str
+    msg_to_delete: list[int] = field(default_factory=list)
 
 
 def random_lower_string(str_len: int = 32) -> str:
@@ -58,14 +62,29 @@ def keyboard_in_maker(
     return reply_in
 
 
-def get_user_info(
-    user_data: Any | None, class_type: Type[UserDataT]
+def get_context_data(
+    data_pack: Any | None, class_type: Type[UserDataT]
 ) -> UserDataT | None:
-    if not user_data or not isinstance(user_data, Mapping):
+    if not data_pack or not isinstance(data_pack, Mapping):
         return None
     field_name = getattr(class_type, "_field_name_", None)
     if not field_name:
         logger.error(f"{class_type} must have a '_field_name_' class attribute")
         return None
-    user_info = user_data.get(field_name, None)
-    return user_info if isinstance(user_info, class_type) else None
+    result_data = data_pack.get(field_name, None)
+    return result_data if isinstance(result_data, class_type) else None
+
+
+def set_context_data(
+    data_pack: dict, data: UserDataT
+) -> Mapping:
+    field_name = getattr(data, "_field_name_", None)
+    if not field_name:
+        logger.error(f"{data} must have a '_field_name_' class attribute")
+        return data_pack
+    data_pack[field_name] = data
+    return data_pack
+
+
+def create_menu_markup(bot_menu: BotMenu) -> InlineKeyboardMarkup:
+    return keyboard_in_maker(bot_menu.buttons, bot_menu.prefix, bot_menu.number)
