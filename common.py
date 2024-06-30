@@ -24,7 +24,9 @@ UserDataT = TypeVar("UserDataT")
 
 
 class QuizzTypeEnum(Enum):
-    WORDS = "words"
+    MAIN_MENU = "main"
+    WORDSETS = "wordsets"
+    WORDSETS_WORD = "wordset>quizz>"
 
 
 @dataclass
@@ -41,6 +43,10 @@ class BotInfo:
     _field_name_ = "bot_info"
     active_bot_msg: int
     quizz_type: QuizzTypeEnum | None = None
+    statistic_msg: int | None = None
+    quizz_data: list = field(default_factory=list)
+    quizz_active_data: dict = field(default_factory=dict)
+    stat_data: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -53,9 +59,9 @@ class BotMenu:
 
 main_bot_menu = BotMenu(
     msg=bot_messages["welcome"],
-    prefix="main",
+    prefix=QuizzTypeEnum.MAIN_MENU.value,
     buttons=[
-        ("📚 Учить слова", QuizzTypeEnum.WORDS.value),
+        ("📚 Учить слова", QuizzTypeEnum.WORDSETS.value),
         ("📝 Статистика", "stats"),
         ("🔧 Настройки", "settings"),
     ],

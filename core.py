@@ -110,38 +110,19 @@ def get_wordsets(api_token: str, page: int = 1, size: int = 1) -> dict:
     return wordsets
 
 
-def get_wordset_quiz(api_url: str, api_token: str, set_id: str) -> list | None:
+def get_wordset_quiz(api_token: str, set_id: str) -> list | None:
     logger.debug("get wordset quizz :: start")
-    url = f"{api_url}/words/quizz/{set_id}"
-    headers = {"Authorization": f"Bearer {api_token}"}
-    quiz_set = None
-    try:
-        res = requests.get(url, headers=headers)
-        res.raise_for_status()
-        quiz_set = res.json()
-    except Exception:
-        pass
+
+    url = f"/words/sets/{set_id}/quizz/"
+    quiz_set = get_query(url, api_token)
+
     if not quiz_set:
-        return list()
+        return None
+
     quizz_words = quiz_set.get("words")
     if not quizz_words:
         return None
 
-    translates = set([tr.get("translate") for tr in quizz_words])
-    quizz = []
-    for word in quizz_words:
-        translate = word["translate"]
-        wrong_translates = translates.copy()
-        wrong_translates.discard(translate)
-        random_translates = random.sample(list(wrong_translates), 3)
-        quizz.append((word["id"], word["word"], translate, random_translates))
-
-    logger.debug(f"get wordsets quizz :: {quizz}")
+    logger.debug(f"get wordsets quizz :: {quizz_words}")
     logger.debug("get wordset quizz :: finish")
-    return quizz
-
-
-def get_word_quiz(word_set: int) -> WordQuizz:
-    return WordQuizz(
-        word="approve", variants=("пара", "непара", "одобрить"), correct="одобрить"
-    )
+    return quizz_words

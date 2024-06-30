@@ -4,7 +4,6 @@ import random
 from enum import IntEnum, auto
 
 from telegram import (
-    InlineKeyboardMarkup,
     ReplyKeyboardRemove,
     Update,
 )
@@ -29,6 +28,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.setLevel("DEBUG")
+
+
+PAGE_PREFIX = "page_"
 
 
 class StateEnum(IntEnum):
@@ -113,27 +115,29 @@ def create_wordsets_menu(user_token: str, page: int = 1) -> BotMenu | None:
     if not wordsets:
         return None
 
-    wordsets_pack = [(str(idx + 1), ws["title"]) for idx, ws in enumerate(wordsets["items"])]
+    wordsets_pack = [(str(idx + 1), ws["title"], ws["id"]) for idx, ws in enumerate(wordsets["items"])]
+    logger.debug(f"{wordsets_pack=}")
     menu_text = bot_messages.get("wordsets")
-    menu_text += "\n".join([f"{idx}. {title}" for idx, title in wordsets_pack])
+    menu_text += "\n".join([f"{idx}. {title}" for idx, title, _ in wordsets_pack])
 
     prev_page, next_page = page != 1, page != wordsets["pages"]
-    buttons = [(ws[0], ws[1]) for ws in wordsets_pack]
+    buttons = [(ws[0], ws[2]) for ws in wordsets_pack]
     if prev_page:
-        buttons.append(("<<", f"page_{page - 1}"))
+        buttons.append(("<<", f"{PAGE_PREFIX}{page - 1}"))
     if next_page:
-        buttons.append((">>", f"page_{page + 1}"))
+        buttons.append((">>", f"{PAGE_PREFIX}{page + 1}"))
+    logger.debug(f"{buttons=}")
     return BotMenu(msg=menu_text, prefix="wordsets", buttons=buttons, number=3)
 
 
-async def show_wordset_menu(context: ContextTypes.DEFAULT_TYPE) -> int:
+async def show_wordsets_menu(context: ContextTypes.DEFAULT_TYPE, page: int = 1) -> int:
     if not is_context_correct(context=context, update=None, need_query=False, need_message=False):
         return ConversationHandler.END
 
     user_info = get_context_data(context.user_data, UserInfo)
     bot_info = get_context_data(context.user_data, BotInfo)
 
-    wordsets_menu = create_wordsets_menu(user_info.user_token)
+    wordsets_menu = create_wordsets_menu(user_info.user_token, page)
     markup = create_menu_markup(wordsets_menu)
     await context.bot.edit_message_text(
         text=wordsets_menu.msg, chat_id=user_info.chat_id, message_id=bot_info.active_bot_msg, reply_markup=markup
@@ -142,7 +146,6 @@ async def show_wordset_menu(context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    logger.debug("handle main menu :: start")
     if not is_context_correct(update, context, need_message=False, need_query=True):
         return ConversationHandler.END
 
@@ -152,113 +155,137 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     prefix, choice = split_query(query.data)
     logger.debug(f"handle main menu :: {prefix=} : {choice=}")
 
-    logger.debug("handle main menu :: finish")
-    if choice == "words":
-        bot_info.quizz_type = QuizzTypeEnum.WORDS
-        return await show_wordset_menu(context)
+    if choice == QuizzTypeEnum.WORDSETS.value:
+        bot_info.quizz_type = QuizzTypeEnum.WORDSETS
+        return await show_wordsets_menu(context)
 
     return ConversationHandler.END
 
 
-async def create_wordsets_quizz(user_token: str, set_id: str) -> list | None:
-    wordset_quizz = get_wordset_quiz(API_URL, user_token, set_id)
-    if not wordset_quizz:
-        return None
-    return wordset_quizz
-
-
 async def show_statistics(context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data:
-        return None
+    bot_info = get_context_data(context.user_data, BotInfo)
+    user_info = get_context_data(context.user_data, UserInfo)
 
-    stat_msg_id = context.user_data["stat_msg_id"]
-    chat_id = context.user_data["chat_id"]
-    stats = context.user_data["wordset_stats"]
-    msg = "Your statistics:\n"
-    msg += f"Words: {stats.get('words')}\n"
-    msg += f"Correct {stats.get('correct')}\n"
-    msg += f"Incorrect: {stats.get('incorrect')}"
-    await context.bot.edit_message_text(msg, chat_id, stat_msg_id)
+    stat_data = bot_info.stat_data
+    ready_cnt = stat_data.get('correct') + stat_data.get('incorrect')
+    msg = "Промежуточный результат:\n"
+    msg += f"Слов: {ready_cnt} / {stat_data.get('words')}\n"
+    msg += f"Верно {stat_data.get('correct')}\n"
+    msg += f"Ошибки: {stat_data.get('incorrect')}"
+    await context.bot.edit_message_text(msg, user_info.chat_id, bot_info.statistic_msg)
 
 
-async def show_wordset_word(context: ContextTypes.DEFAULT_TYPE, play_word) -> int:
-    if not context.user_data:
-        return ConversationHandler.END
+async def show_wordset_word(context: ContextTypes.DEFAULT_TYPE) -> int:
+    bot_info = get_context_data(context.user_data, BotInfo)
+    user_info = get_context_data(context.user_data, UserInfo)
 
+    play_word = bot_info.quizz_active_data
     buttons = [
-        (play_word[2].capitalize(), 1),
-    ] + [(el.capitalize(), 0) for el in play_word[3]]
+        (play_word["translate"].capitalize(), 1),
+    ] + [(el["translate"].capitalize(), 0) for el in play_word["wrong_words"]]
     random.shuffle(buttons)
-    markup = keyboard_in_maker(buttons, f"wordset>quizz>{play_word[0]}", 2)
-    msg = f"{play_word[1].capitalize()}"
+    markup = keyboard_in_maker(buttons, f"wordset>quizz>{play_word['id']}", 2)
+    msg = f"{play_word['word'].capitalize()}"
 
-    quizz_msg_id = context.user_data.get("quizz_msg_id")
-    chat_id = context.user_data.get("chat_id")
-    if not chat_id:
-        return ConversationHandler.END
-    if not quizz_msg_id:
+    if not bot_info.active_bot_msg:
         quizz_msg = await context.bot.send_message(
-            chat_id, text=msg, reply_markup=markup
+            user_info.chat_id, text=msg, reply_markup=markup
         )
-        context.user_data["quizz_msg_id"] = quizz_msg.message_id
+        bot_info.active_bot_msg = quizz_msg.message_id
     else:
         await context.bot.edit_message_text(
-            text=msg, chat_id=chat_id, message_id=quizz_msg_id, reply_markup=markup
+            text=msg, chat_id=user_info.chat_id, message_id=bot_info.active_bot_msg, reply_markup=markup
         )
     return StateEnum.WORD_PLAY
 
 
+async def show_result(context: ContextTypes.DEFAULT_TYPE) -> int:
+    bot_info = get_context_data(context.user_data, BotInfo)
+    user_info = get_context_data(context.user_data, UserInfo)
+
+    stat_data = bot_info.stat_data
+    ready_cnt = stat_data.get('correct') + stat_data.get('incorrect')
+    msg = "Итог игры: \n"
+    msg += f"Слов: {ready_cnt} / {stat_data.get('words')}\n"
+    msg += f"Верно {stat_data.get('correct')}\n"
+    msg += f"Ошибки: {stat_data.get('incorrect')}"
+
+    end_menu = BotMenu(msg, QuizzTypeEnum.WORDSETS_WORD.value, [("Еще", QuizzTypeEnum.WORDSETS.value)])
+    markup = create_menu_markup(end_menu)
+    user_info.msg_to_delete.append(bot_info.active_bot_msg)
+    bot_info.active_bot_msg = None
+    bot_info.active_bot_msg = bot_info.statistic_msg
+    bot_info.statistic_msg = None
+    await context.bot.edit_message_text(
+        text=msg, chat_id=user_info.chat_id, message_id=bot_info.active_bot_msg, reply_markup=markup
+    )
+
+    return await set_state(context, StateEnum.WORD_PLAY)
+
+
 async def wordset_quizz_play(context: ContextTypes.DEFAULT_TYPE) -> int:
-    wordset_quizz = context.user_data["wordset_quizz"] if context.user_data else None
-    logger.debug(f"wordset quizz play :: {wordset_quizz}")
-    if not wordset_quizz:
-        return await show_wordset_menu(context)
-    play_word = wordset_quizz.pop()
-    if not play_word:
-        return await show_wordset_menu(context)
+    bot_info = get_context_data(context.user_data, BotInfo)
+    quizz_data = bot_info.quizz_data
+
+    if not quizz_data:
+        return await show_result(context)
+    play_word = quizz_data.pop()
+
+    if not bot_info.statistic_msg:
+        bot_info.statistic_msg = bot_info.active_bot_msg
+        bot_info.active_bot_msg = None
+    bot_info.quizz_active_data = play_word
+
     await show_statistics(context)
-    return await show_wordset_word(context, play_word)
+    return await show_wordset_word(context)
 
 
 async def handle_wordset_menu(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     logger.debug("handle wordset :: start")
-    query = update.callback_query
-    if not query:
-        return ConversationHandler.END
-    await query.answer()
-    if not query.data:
+    if not is_context_correct(update, context, need_message=False, need_query=True):
         return ConversationHandler.END
 
-    user_token = context.user_data.get("user_token", "") if context.user_data else ""
-    prefix, wordset_id = query.data.split(":")
-    logger.debug(f"handle main menu :: conf : {prefix} : {wordset_id}")
-    wordset_quizz = await create_wordsets_quizz(user_token, wordset_id)
-    if not wordset_quizz or not context.user_data:
-        return ConversationHandler.END
-    context.user_data["wordset_quizz"] = wordset_quizz
-    context.user_data["wordset_stats"] = {"words": 0, "correct": 0, "incorrect": 0}
+    query = update.callback_query
+    await query.answer()
+
+    prefix, wordset_id = split_query(query.data)
+    logger.debug(f"handle wordset menu :: {prefix=} : {wordset_id=}")
+
+    if wordset_id.startswith(PAGE_PREFIX):
+        page = int(wordset_id.split("_")[1])
+        logger.debug(f"handle wordset menu :: {page=}")
+        return await show_wordsets_menu(context, page)
+
+    user_info = get_context_data(context.user_data, UserInfo)
+    bot_info = get_context_data(context.user_data, BotInfo)
+    wordset_quizz = get_wordset_quiz(user_info.user_token, wordset_id)
+
+    bot_info.quizz_data = wordset_quizz
+    bot_info.stat_data = {"words": len(wordset_quizz), "correct": 0, "incorrect": 0}
+
     logger.debug("handle wordset :: finish")
     return await wordset_quizz_play(context)
 
 
 async def handle_wordset_play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.debug("handle wordset play :: start")
+    if not is_context_correct(update, context, need_message=False, need_query=True):
+        return ConversationHandler.END
+
     query = update.callback_query
-    if not query:
-        return ConversationHandler.END
-
     await query.answer()
-    if not query.data:
-        return ConversationHandler.END
 
-    prefix, is_correct = query.data.split(":")
-    logger.debug(f"handle wordset play :: {prefix} : {is_correct}")
-    stats = context.user_data.get("wordset_stats") if context.user_data else None
-    if not stats:
-        return ConversationHandler.END
-    stats["words"] += 1
+    prefix, is_correct = split_query(query.data)
+    if is_correct == QuizzTypeEnum.WORDSETS.value:
+        return await handle_main_menu(update, context)
+
+    logger.debug(f"handle wordset play :: {prefix=} : {is_correct=}")
+    user_info = get_context_data(context.user_data, UserInfo)
+    bot_info = get_context_data(context.user_data, BotInfo)
+
+    stats = bot_info.stat_data
     if int(is_correct):
         stats["correct"] += 1
     else:
@@ -302,10 +329,10 @@ def main() -> None:
                 CallbackQueryHandler(handle_main_menu, pattern=main_bot_menu.prefix)
             ],
             StateEnum.CHOOSING_WORDSET: [
-                CallbackQueryHandler(handle_wordset_menu, pattern="wordsets:")
+                CallbackQueryHandler(handle_wordset_menu, pattern=QuizzTypeEnum.WORDSETS.value)
             ],
             StateEnum.WORD_PLAY: [
-                CallbackQueryHandler(handle_wordset_play, pattern="wordset>quizz")
+                CallbackQueryHandler(handle_wordset_play, pattern=QuizzTypeEnum.WORDSETS_WORD.value)
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
