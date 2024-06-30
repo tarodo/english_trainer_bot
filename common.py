@@ -13,6 +13,7 @@ from telegram import (
 
 from telegram.ext import ContextTypes
 
+from data.messages import bot_messages
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -44,12 +45,14 @@ class BotInfo:
 
 @dataclass
 class BotMenu:
+    msg: str
     prefix: str
     buttons: list[tuple[str, str]] = field(default_factory=list)
     number: int = 2
 
 
 main_bot_menu = BotMenu(
+    msg=bot_messages["welcome"],
     prefix="main",
     buttons=[
         ("📚 Учить слова", QuizzTypeEnum.WORDS.value),

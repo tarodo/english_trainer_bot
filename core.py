@@ -27,7 +27,7 @@ class WordQuizz:
     correct: str
 
 
-def get_query(url: str, api_token: str, params: dict) -> list | dict | None:
+def get_query(url: str, api_token: str, params: dict = None) -> list | dict | None:
     url = f"{API_URL}{url}"
     headers = {"Authorization": f"Bearer {api_token}"}
     logger.debug(f"get_query :: {url} :: {params}")
@@ -98,12 +98,12 @@ async def reg_user(user_id: int, bot_token: str) -> str | None:
         return user_token
 
 
-def get_wordsets(api_token: str, page: int = 1) -> list:
+def get_wordsets(api_token: str, page: int = 1, size: int = 1) -> dict:
     """Fetch word sets from the API."""
     logger.debug("get_wordsets :: start")
-    params = {"page": page, "size": 9}
+    params = {"page": page, "size": size}
     url = f"/words/sets/"
-    wordsets = get_query(url, api_token)
+    wordsets = get_query(url, api_token, params)
 
     logger.debug(f"get_wordsets :: {wordsets}")
     logger.debug("get_wordsets :: finish")

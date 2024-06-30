@@ -1,9 +1,8 @@
 import logging
 import os
 import random
-from enum import IntEnum, Enum, auto
+from enum import IntEnum, auto
 
-import requests
 from telegram import (
     InlineKeyboardMarkup,
     ReplyKeyboardRemove,
@@ -19,7 +18,7 @@ from telegram.ext import (
 from dotenv import load_dotenv
 
 from common import keyboard_in_maker, UserInfo, set_context_data, get_context_data, \
-    create_menu_markup, BotInfo, split_query, QuizzTypeEnum, main_bot_menu
+    create_menu_markup, BotInfo, split_query, QuizzTypeEnum, main_bot_menu, BotMenu
 from core import get_wordsets, get_wordset_quiz, get_bot_token, get_user_token, reg_user
 from data.messages import bot_messages
 
@@ -78,7 +77,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not is_context_correct(update, context):
         return ConversationHandler.END
 
-    text = bot_messages.get("welcome")
+    text = main_bot_menu.msg
     markup = create_menu_markup(main_bot_menu)
     new_message = await update.message.reply_text(
         text,
@@ -109,12 +108,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await show_main_menu(update, context)
 
 
-async def create_wordsets_menu(user_token: str) -> InlineKeyboardMarkup | None:
-    wordsets = get_wordsets(user_token)
+def create_wordsets_menu(user_token: str, page: int = 1) -> BotMenu | None:
+    wordsets = get_wordsets(user_token, page)
     if not wordsets:
         return None
-    buttons = [(ws["title"], ws["id"]) for ws in wordsets]
-    return keyboard_in_maker(buttons, "wordsets", 3)
+
+    wordsets_pack = [(str(idx + 1), ws["title"]) for idx, ws in enumerate(wordsets["items"])]
+    menu_text = bot_messages.get("wordsets")
+    menu_text += "\n".join([f"{idx}. {title}" for idx, title in wordsets_pack])
+
+    prev_page, next_page = page != 1, page != wordsets["pages"]
+    buttons = [(ws[0], ws[1]) for ws in wordsets_pack]
+    if prev_page:
+        buttons.append(("<<", f"page_{page - 1}"))
+    if next_page:
+        buttons.append((">>", f"page_{page + 1}"))
+    return BotMenu(msg=menu_text, prefix="wordsets", buttons=buttons, number=3)
 
 
 async def show_wordset_menu(context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -124,29 +133,10 @@ async def show_wordset_menu(context: ContextTypes.DEFAULT_TYPE) -> int:
     user_info = get_context_data(context.user_data, UserInfo)
     bot_info = get_context_data(context.user_data, BotInfo)
 
-    bot_info
-
-    markup = await create_wordsets_menu(user_info.user_token)
-
-    stat_msg_id = context.user_data.get("stat_msg_id")
-    quizz_msg_id = context.user_data.get("quizz_msg_id")
-    chat_id = context.user_data.get("chat_id")
-    logger.debug(f"{stat_msg_id=} :: {quizz_msg_id=} :: {chat_id}")
-    if not chat_id:
-        return ConversationHandler.END
-    if quizz_msg_id:
-        context.user_data["quizz_msg_id"] = None
-        await context.bot.delete_message(chat_id, quizz_msg_id)
-    logger.debug(f"show wordset menu :: {stat_msg_id=}")
-    chat_id = context.user_data.get("chat_id")
-    msg = "We have some sets for training"
-    prev_stats = context.user_data.get("wordset_stats")
-    if prev_stats and prev_stats.get("words"):
-        msg += f"\nResult\nWords: {prev_stats['words']}"
-        msg += f"\nCorrect: {prev_stats['correct']} :: Incorrect: {prev_stats['incorrect']}"
-
+    wordsets_menu = create_wordsets_menu(user_info.user_token)
+    markup = create_menu_markup(wordsets_menu)
     await context.bot.edit_message_text(
-        text=msg, chat_id=chat_id, message_id=stat_msg_id, reply_markup=markup
+        text=wordsets_menu.msg, chat_id=user_info.chat_id, message_id=bot_info.active_bot_msg, reply_markup=markup
     )
     return StateEnum.CHOOSING_WORDSET
 
