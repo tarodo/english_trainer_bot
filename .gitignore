@@ -3,3 +3,4 @@ venv
 main_old.py
 __pycache__
 .idea
+.env
