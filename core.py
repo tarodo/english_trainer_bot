@@ -36,6 +36,7 @@ def get_query(url: str, api_token: str, params: dict = None) -> list | dict | No
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
+        logger.error(f"Error fetching post: {response.json()}")
         logger.error(f"Error fetching get: {e}")
 
 
@@ -45,13 +46,12 @@ def post_query(url: str, api_token: str | None,
     headers = {}
     if api_token:
         headers = {"Authorization": f"Bearer {api_token}"}
-    logger.debug(f"post_query :: {url} :: {data}")
+    logger.debug(f"post_query :: {url} :: {data} :: {json_data}")
     try:
         response = requests.post(url, headers=headers, data=data, json=json_data)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
-        logger.error(f"Error fetching post: {response.json()}")
         logger.error(f"Error fetching post: {e}")
 
 
