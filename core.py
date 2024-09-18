@@ -98,7 +98,7 @@ async def reg_user(user_id: int, bot_token: str) -> str | None:
         return user_token
 
 
-def get_wordsets(api_token: str, page: int = 1, size: int = 1) -> dict:
+def get_wordsets(api_token: str, page: int = 1, size: int = 6) -> dict:
     """Fetch word sets from the API."""
     logger.debug("get_wordsets :: start")
     params = {"page": page, "size": size}
